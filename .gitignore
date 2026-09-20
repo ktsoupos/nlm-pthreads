@@ -1,0 +1,19 @@
+# Build artifacts
+*.o
+/build/
+/nlm
+/main
+
+# Data: clean/ is committed, noisy/ and out/ are generated
+data/noisy/
+data/out/
+
+# Python tooling (never linked into the benchmarked binary)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor / OS
+.DS_Store
+*.swp
