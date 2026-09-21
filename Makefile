@@ -6,8 +6,7 @@ SRC_DIR   := src
 BUILD_DIR := build
 TARGET    := nlm
 
-# main.c currently lives at repo root; src/*.c will join it as variants land.
-SRCS := main.c $(wildcard $(SRC_DIR)/*.c)
+SRCS := $(wildcard $(SRC_DIR)/*.c)
 OBJS := $(addprefix $(BUILD_DIR)/,$(SRCS:.c=.o))
 
 .PHONY: all cluster clean
