@@ -58,9 +58,10 @@ void nlm_run(const image_t *in, image_t *out,
    *unmodified* input and writes to a disjoint output region, so there are **no locks
    in the hot loop**. Never denoise in place: overwriting the input corrupts patches
    that later pixels still need to read.
-3. `nlm_pthreads_simd` — AVX2 in the patch-distance loop. Keep `patch_scalar.c` and
-   `patch_avx2.c` behind one shared signature so this is a link-time swap, not a
-   rewrite.
+3. `nlm_pthreads_simd` — AVX2 in the patch-distance loop. `patch.c` holds both
+   `patch_dist2_scalar` and `patch_dist2_avx2` behind one shared signature
+   (same params, same return type, same output), so `nlm_pthreads_simd` calling
+   the AVX2 one instead of the scalar one is a one-line change, not a rewrite.
 4. `nlm_integral` — integral-image reformulation (Darbon et al.): loop over
    displacements `t = j - i` rather than over pixels, so overlapping patch sums are
    computed once. Drops complexity to `O(N · S²)`, removing the patch factor.
@@ -69,8 +70,7 @@ void nlm_run(const image_t *in, image_t *out,
 
 ```
 include/        image.h  nlm.h  patch.h  timer.h
-src/            main.c  image.c  timer.c
-                patch_scalar.c  patch_avx2.c
+src/            main.c  image.c  timer.c  patch.c
                 nlm_seq.c  nlm_pthreads.c  nlm_integral.c
 external/stb/   stb_image.h  stb_image_write.h   (vendored, committed)
 scripts/        make_noisy.py  metrics.py  reference_nlm.py
