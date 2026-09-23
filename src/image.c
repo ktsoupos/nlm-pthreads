@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -52,6 +53,9 @@ image_t image_load(const char *path, int pad){
 }
 
 static float clampf(float v, float lo, float hi){
+    // NaN compares false against everything, so it would otherwise fall through
+    // to an undefined (unsigned char) cast in image_write.
+    if(isnan(v)) return lo;
     if(v < lo) return lo;
     if(v > hi) return hi;
     return v;
