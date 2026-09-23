@@ -1,3 +1,6 @@
+#ifndef IMAGE_H
+#define IMAGE_H
+
 /**
  * @brief Grayscale image stored as float pixels with a reflected border.
  *
@@ -66,3 +69,5 @@ void    image_write(const image_t *img, const char *path);
  *             @c data == NULL.
  */
 void    image_free(image_t *img);
+
+#endif
