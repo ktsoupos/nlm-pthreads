@@ -5,7 +5,11 @@
 
 /** @brief Selects which nlm_run() implementation runs; all must produce
  *         identical output — only speed differs. */
-typedef enum { NLM_SEQ, NLM_PTHREADS, NLM_PTHREADS_SIMD, NLM_INTEGRAL } nlm_variant;
+typedef enum {
+    NLM_SEQ, NLM_SEQ_SIMD,
+    NLM_PTHREADS, NLM_PTHREADS_SIMD,
+    NLM_INTEGRAL, NLM_INTEGRAL_PTHREADS
+} nlm_variant;
 
 /**
  * @brief Parameters shared by every NLM variant.
