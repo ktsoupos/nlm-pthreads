@@ -6,12 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/** Patch-distance backend; scalar and AVX2 share one signature so the only
- *  difference between a variant and its SIMD twin is which one gets passed in. */
 typedef float (*patch_dist_fn)(const image_t *, int, int, int, int, int);
 
-/** A body that denoises output rows [y0, y1). Reads only `in` and writes only
- *  those rows of `out`, so disjoint ranges need no synchronisation. */
+/* Denoises output rows [y0, y1). Reads only `in`, writes only those rows of
+   `out`, so disjoint ranges need no synchronisation. */
 typedef void (*rows_fn)(const image_t *, image_t *, const nlm_params *,
                         patch_dist_fn, int, int);
 
@@ -73,9 +71,8 @@ static void direct_rows(const image_t *in, image_t *out, const nlm_params *p,
             Z    += max_w;
             wsum += max_w * IMG_AT(in, yi, xi);
 
-            // Every weight can underflow to zero (small h on high-contrast content,
-            // or search_radius == 0), leaving Z == 0. No patch supports an estimate
-            // here, so the pixel's own value is the best one available.
+            // All weights can underflow to zero (small h, high contrast), leaving
+            // Z == 0. Nothing supports an estimate, so keep the pixel's own value.
             IMG_AT(out, yi, xi) = (Z > 0.0f) ? (wsum / Z) : IMG_AT(in, yi, xi);
         }
     }
@@ -84,36 +81,24 @@ static void direct_rows(const image_t *in, image_t *out, const nlm_params *p,
 
 /* -------------------------------------------------------------- integral */
 
-/**
- * Integral / separable-box reformulation (Darbon et al.), restricted to output
- * rows [y0, y1).
- *
- * Rather than looping over pixels and then their search window, loop over
- * displacements t = j - i. For a fixed t the squared-difference image is shared
- * by every pixel, so a running box sum answers "patch sum at pixel i" in O(1).
- * That removes the P^2 patch factor: O(N*S^2*P^2) -> O(N*S^2).
+/*
+ * Loops over displacements t = j - i instead of over each pixel's search window:
+ * for a fixed t the squared-difference image is shared by every pixel, so a
+ * running box sum gives each patch sum in O(1). Drops O(N*S^2*P^2) to O(N*S^2).
  *
  * The box sum is kept separable and rolling rather than as a 2D summed-area
- * table. `col[]` holds, per column, the sum over the patch's 2*pr+1 rows;
- * stepping down a row adds the incoming row and subtracts the outgoing one, and
- * a horizontal running window over col[] then gives each pixel's patch sum.
- * That keeps the working set at one row of floats (a few KB, L1-resident)
- * instead of a full (rows+2pr)x(W+2pr) table of doubles, which is what the
- * thread-scaling measurements showed to be the bottleneck.
+ * table, which keeps the working set to one L1-resident row of floats. That also
+ * lets it stay float: a 2D table reaches ~1.7e10, where float32's ULP (~2048)
+ * would swamp a patch sum of ~6e4 taken as a difference of two entries. Rolling
+ * sums peak at (2*pr+1)^2 * 255^2 = 3.19e6, inside float32's exact-integer range,
+ * so every intermediate is exact and this matches direct_rows bit for bit.
  *
- * Shrinking the window also removes the need for double. A 2D table accumulates
- * to ~1.7e10, far past float32's 2^24 exact-integer limit, so patch sums taken
- * as differences of table entries lose precision badly. Here a column sum tops
- * out at (2*pr+1)*255^2 and a patch sum at (2*pr+1)^2*255^2 = 3.19e6 for a 7x7
- * patch -- every intermediate is an exactly representable integer, so the
- * rolling updates never drift and this reproduces direct_rows bit for bit.
- *
- * Each call covers only its own rows, reading a pr-row halo above and below, so
- * parallel row blocks share no accumulator and need no reduction.
+ * Covers only rows [y0, y1), reading a pr-row halo, so parallel row blocks share
+ * no accumulator and need no reduction.
  */
 static void integral_rows(const image_t *in, image_t *out, const nlm_params *p,
                           patch_dist_fn dist, int y0, int y1){
-    (void)dist;   // the integral form has no per-pair patch-distance call to swap
+    (void)dist;   // no per-pair patch-distance call to swap here
 
     const int W = in->width;
     const int pr = p->patch_radius, sr = p->search_radius;
@@ -139,7 +124,7 @@ static void integral_rows(const image_t *in, image_t *out, const nlm_params *p,
         for(int dx = -sr; dx <= sr; dx++){
             if(dy == 0 && dx == 0) continue;   // self-weight applied after the loop
 
-            // Seed the column sums for the first output row: rows [y0-pr, y0+pr].
+            // seed column sums for the first output row
             for(int c = 0; c < cw; c++){
                 const int x = c - pr;
                 float s = 0.0f;
@@ -152,7 +137,7 @@ static void integral_rows(const image_t *in, image_t *out, const nlm_params *p,
 
             for(int yi = y0; yi < y1; yi++){
                 if(yi > y0){
-                    // Roll down one row: add row yi+pr, drop row yi-1-pr.
+                    // roll down one row
                     const int y_add = yi + pr, y_drop = yi - 1 - pr;
                     for(int c = 0; c < cw; c++){
                         const int x = c - pr;
@@ -162,7 +147,7 @@ static void integral_rows(const image_t *in, image_t *out, const nlm_params *p,
                     }
                 }
 
-                // Horizontal running window: pixel xi covers col[] indices [xi, xi+2pr].
+                // pixel xi covers col[] indices [xi, xi+2pr]
                 float running = 0.0f;
                 for(int c = 0; c <= 2*pr; c++) running += col[c];
 
@@ -220,7 +205,7 @@ static void run_parallel(const image_t *in, image_t *out, const nlm_params *p,
                          rows_fn body, patch_dist_fn dist){
     int nthreads = p->threads;
     if(nthreads < 1)          nthreads = 1;
-    if(nthreads > in->height) nthreads = in->height;   // never create idle workers
+    if(nthreads > in->height) nthreads = in->height;
 
     if(nthreads == 1){
         body(in, out, p, dist, 0, in->height);
@@ -231,14 +216,13 @@ static void run_parallel(const image_t *in, image_t *out, const nlm_params *p,
     worker_arg *args = malloc((size_t)nthreads * sizeof *args);
     if(!tids || !args){
         free(tids); free(args);
-        body(in, out, p, dist, 0, in->height);   // degrade to serial rather than fail
+        body(in, out, p, dist, 0, in->height);   // degrade to serial, not fail
         return;
     }
 
-    // Contiguous row blocks, not interleaved rows: neighbouring output rows reuse
-    // overlapping search windows, so a contiguous block keeps that reuse inside one
-    // core's cache. Work per pixel is constant (S^2 * P^2), so static splitting is
-    // already balanced. The first (height % nthreads) blocks absorb the remainder.
+    // Contiguous blocks, not interleaved rows: neighbouring output rows reuse
+    // overlapping search windows, keeping that reuse in one core's cache. Work per
+    // pixel is constant, so static splitting is already balanced.
     const int base = in->height / nthreads;
     const int extra = in->height % nthreads;
     int y = 0;
@@ -256,8 +240,7 @@ static void run_parallel(const image_t *in, image_t *out, const nlm_params *p,
         if(pthread_create(&tids[t], NULL, worker_main, &args[t]) != 0) break;
         started++;
     }
-    // Any block whose thread could not start runs here, so the output is never
-    // left partially denoised.
+    // blocks whose thread could not start run here, so output is never partial
     for(int t = started; t < nthreads; t++)
         body(in, out, p, dist, args[t].y0, args[t].y1);
 
